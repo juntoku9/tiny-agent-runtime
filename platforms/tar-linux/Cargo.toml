@@ -3,11 +3,23 @@ name = "tar-linux"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
-description = "Linux edge-SoC platform binary — the camera \"brain\"."
+description = "Linux edge-SoC platform — the camera \"brain\" and a tool-node simulator."
+
+[lib]
+name = "tar_linux"
+path = "src/lib.rs"
 
 [[bin]]
 name = "tar-linux"
 path = "src/main.rs"
+
+[[bin]]
+name = "tar-node-sim"
+path = "src/bin/tar-node-sim.rs"
+
+[[bin]]
+name = "tar-brain"
+path = "src/bin/tar-brain.rs"
 
 [dependencies]
 tar-core = { workspace = true }
@@ -16,5 +28,6 @@ tar-proto = { workspace = true }
 tar-llm = { workspace = true }
 tar-tools = { workspace = true }
 tar-policy = { workspace = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

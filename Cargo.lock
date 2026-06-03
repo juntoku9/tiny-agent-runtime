@@ -785,6 +785,7 @@ dependencies = [
 name = "tar-core"
 version = "0.0.0"
 dependencies = [
+ "serde_json",
  "tar-hal",
  "tar-proto",
 ]
@@ -802,6 +803,7 @@ name = "tar-linux"
 version = "0.0.0"
 dependencies = [
  "reqwest",
+ "serde_json",
  "tar-core",
  "tar-hal",
  "tar-llm",

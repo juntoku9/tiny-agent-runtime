@@ -60,6 +60,16 @@ pub trait Transport {
     fn recv(&self) -> impl Future<Output = HalResult<Vec<u8>>>;
 }
 
+/// Allow sharing one transport across several remote tools via `Arc`.
+impl<T: Transport> Transport for alloc::sync::Arc<T> {
+    fn send(&self, frame: &[u8]) -> impl Future<Output = HalResult<()>> {
+        (**self).send(frame)
+    }
+    fn recv(&self) -> impl Future<Output = HalResult<Vec<u8>>> {
+        (**self).recv()
+    }
+}
+
 /// Digital actuator / sensor channel (a GPIO pin or equivalent).
 pub trait Actuator {
     fn set(&self, channel: u16, level: bool) -> HalResult<()>;

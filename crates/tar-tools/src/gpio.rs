@@ -13,6 +13,49 @@ use tar_core::Tool;
 use tar_hal::Actuator;
 use tar_proto::{ToolInput, ToolManifest, ToolResult};
 
+/// Reads a digital input/sensor channel via the `Actuator` HAL.
+pub struct GpioReadTool<A: Actuator> {
+    actuator: A,
+}
+
+impl<A: Actuator> GpioReadTool<A> {
+    pub fn new(actuator: A) -> Self {
+        Self { actuator }
+    }
+}
+
+impl<A: Actuator> Tool for GpioReadTool<A> {
+    fn manifest(&self) -> ToolManifest {
+        ToolManifest {
+            name: "gpio_read".to_string(),
+            description: "Read a digital channel; returns \"1\" (HIGH) or \"0\" (LOW).".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "channel": { "type": "integer" } },
+                "required": ["channel"]
+            }),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        input: ToolInput,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + 'a>> {
+        Box::pin(async move {
+            match input.args.get("channel").and_then(|v| v.as_u64()) {
+                Some(ch) => match self.actuator.get(ch as u16) {
+                    Ok(level) => ToolResult {
+                        ok: true,
+                        content: if level { "1".to_string() } else { "0".to_string() },
+                    },
+                    Err(_) => ToolResult { ok: false, content: "actuator error".to_string() },
+                },
+                None => ToolResult { ok: false, content: "invalid input".to_string() },
+            }
+        })
+    }
+}
+
 /// Sets a digital output channel high or low via the `Actuator` HAL.
 pub struct GpioTool<A: Actuator> {
     actuator: A,

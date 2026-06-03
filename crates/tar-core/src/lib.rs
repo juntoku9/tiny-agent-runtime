@@ -57,7 +57,11 @@ pub trait LlmProvider {
 pub enum CoreError {
     Provider(String),
     BudgetExhausted,
+    /// Transport / (de)serialization failure on the node protocol.
+    Io(String),
 }
+
+pub mod node;
 
 /// Bounds the ReAct loop so a runaway model cannot spend without limit.
 #[derive(Debug, Clone, Copy)]

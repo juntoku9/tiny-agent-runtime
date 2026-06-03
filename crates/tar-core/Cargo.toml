@@ -8,3 +8,4 @@ description = "Portable, I/O-free agent core: ReAct loop, tools, memory contract
 [dependencies]
 tar-hal = { workspace = true }
 tar-proto = { workspace = true }
+serde_json = { workspace = true }

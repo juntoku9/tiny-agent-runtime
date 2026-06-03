@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use serde_json::{json, Value};
 
-use tar_core::{CoreError, LlmProvider, Message, Role};
+use tar_core::{Content, CoreError, LlmProvider, Role, Turn};
 use tar_hal::HttpClient;
 use tar_proto::ToolManifest;
 
@@ -32,23 +32,34 @@ impl<H: HttpClient> AnthropicProvider<H> {
     }
 }
 
+/// Map a core `Turn` into an Anthropic message object (content as a block array).
+fn turn_to_message(turn: &Turn) -> Value {
+    let role = match turn.role {
+        Role::Assistant => "assistant",
+        _ => "user",
+    };
+    let mut blocks: Vec<Value> = Vec::new();
+    for c in &turn.content {
+        match c {
+            Content::Text(t) => blocks.push(json!({ "type": "text", "text": t })),
+            Content::ToolUse { id, name, input } => {
+                blocks.push(json!({ "type": "tool_use", "id": id, "name": name, "input": input }))
+            }
+            Content::ToolResult { tool_use_id, content } => blocks
+                .push(json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })),
+        }
+    }
+    json!({ "role": role, "content": blocks })
+}
+
 impl<H: HttpClient> LlmProvider for AnthropicProvider<H> {
     async fn complete(
         &self,
         system: &str,
-        messages: &[Message],
+        turns: &[Turn],
         tools: &[ToolManifest],
-    ) -> Result<Message, CoreError> {
-        // Anthropic puts `system` at the top level, not in the messages array.
-        let mut msgs: Vec<Value> = Vec::new();
-        for m in messages {
-            let role = match m.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::System => continue,
-            };
-            msgs.push(json!({ "role": role, "content": m.content }));
-        }
+    ) -> Result<Turn, CoreError> {
+        let msgs: Vec<Value> = turns.iter().map(turn_to_message).collect();
 
         let mut body = json!({
             "model": self.model,
@@ -82,19 +93,27 @@ impl<H: HttpClient> LlmProvider for AnthropicProvider<H> {
         let v: Value =
             serde_json::from_slice(&resp.body).map_err(|e| CoreError::Provider(e.to_string()))?;
 
-        // Concatenate the text blocks of the response content. (tool_use blocks
-        // are handled by the agent loop in Phase 2.)
-        let mut text = String::new();
+        // Parse the response content blocks into a core assistant turn.
+        let mut content: Vec<Content> = Vec::new();
         if let Some(blocks) = v.get("content").and_then(|c| c.as_array()) {
             for b in blocks {
-                if b.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
-                        text.push_str(t);
+                match b.get("type").and_then(|t| t.as_str()) {
+                    Some("text") => {
+                        if let Some(t) = b.get("text").and_then(|x| x.as_str()) {
+                            content.push(Content::Text(t.to_string()));
+                        }
                     }
+                    Some("tool_use") => {
+                        let id = b.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                        let name = b.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                        let input = b.get("input").cloned().unwrap_or(Value::Null);
+                        content.push(Content::ToolUse { id, name, input });
+                    }
+                    _ => {}
                 }
             }
         }
 
-        Ok(Message { role: Role::Assistant, content: text })
+        Ok(Turn { role: Role::Assistant, content })
     }
 }

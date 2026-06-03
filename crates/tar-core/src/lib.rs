@@ -6,11 +6,13 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 
+use serde_json::Value;
 use tar_hal::Storage;
 use tar_proto::{ToolInput, ToolManifest, ToolResult};
 
@@ -22,11 +24,21 @@ pub enum Role {
     System,
 }
 
-/// A single conversation turn.
+/// A piece of turn content. Rich enough to carry the tool-use protocol so the
+/// agent loop is provider-agnostic; the provider maps these to/from its wire
+/// format (e.g. Anthropic content blocks).
 #[derive(Debug, Clone)]
-pub struct Message {
+pub enum Content {
+    Text(String),
+    ToolUse { id: String, name: String, input: Value },
+    ToolResult { tool_use_id: String, content: String },
+}
+
+/// One conversation turn: a role plus a sequence of content blocks.
+#[derive(Debug, Clone)]
+pub struct Turn {
     pub role: Role,
-    pub content: String,
+    pub content: Vec<Content>,
 }
 
 /// A capability the agent can invoke. Local pins and remote tool-nodes
@@ -42,15 +54,15 @@ pub trait Tool {
     ) -> Pin<Box<dyn Future<Output = ToolResult> + 'a>>;
 }
 
-/// A cloud (or local) LLM provider. Implemented in `tar-llm`.
+/// A cloud (or local) LLM provider. Implemented in `tar-llm`. Returns the
+/// assistant turn; the agent loop inspects it for `ToolUse` blocks.
 pub trait LlmProvider {
-    /// One non-streaming completion over the given messages and tools.
     fn complete(
         &self,
         system: &str,
-        messages: &[Message],
+        turns: &[Turn],
         tools: &[ToolManifest],
-    ) -> impl Future<Output = Result<Message, CoreError>>;
+    ) -> impl Future<Output = Result<Turn, CoreError>>;
 }
 
 #[derive(Debug, Clone)]
@@ -85,8 +97,8 @@ pub fn build_system_prompt(storage: &dyn Storage) -> String {
 }
 
 /// The ReAct agent loop, generic over its LLM provider. Holds a registry of
-/// tools (local or remote) and, once complete, runs reason → act → observe
-/// until the model ends its turn or the budget is spent.
+/// tools (local or remote) and runs reason → act → observe until the model
+/// ends its turn or the budget is spent.
 pub struct AgentLoop<P: LlmProvider> {
     provider: P,
     tools: Vec<Box<dyn Tool>>,
@@ -103,18 +115,61 @@ impl<P: LlmProvider> AgentLoop<P> {
         self.tools.iter().map(|t| t.manifest()).collect()
     }
 
-    /// Run the agent over a system prompt and history.
-    ///
-    /// Phase 0 issues a single completion; Phase 1 expands this body into the
-    /// full tool-execution loop (parse `tool_use`, dispatch tools, feed results
-    /// back) bounded by [`Budget`].
-    pub async fn run(&self, system: &str, history: &[Message]) -> Result<Message, CoreError> {
-        if self.budget.max_iterations == 0 {
-            return Err(CoreError::BudgetExhausted);
+    /// Execute a tool by name against the registry.
+    async fn dispatch(&self, name: &str, input: ToolInput) -> ToolResult {
+        for t in &self.tools {
+            if t.manifest().name == name {
+                return t.call(input).await;
+            }
         }
-        let tools = self.manifests();
-        // Phase 0: a single completion. Phase 1 loops up to
-        // `budget.max_iterations`, dispatching tools between turns.
-        self.provider.complete(system, history, &tools).await
+        ToolResult { ok: false, content: format!("unknown tool: {}", name) }
+    }
+
+    /// Run the ReAct loop on a system prompt and a single user message.
+    ///
+    /// Each turn: call the provider; if the assistant returns `tool_use`
+    /// blocks, execute them, append the assistant turn and a `tool_result`
+    /// turn, and loop; otherwise return the concatenated assistant text.
+    pub async fn run(&self, system: &str, user_text: &str) -> Result<String, CoreError> {
+        let manifests = self.manifests();
+
+        let mut first = Vec::new();
+        first.push(Content::Text(String::from(user_text)));
+        let mut turns: Vec<Turn> = Vec::new();
+        turns.push(Turn { role: Role::User, content: first });
+
+        let mut iterations: u8 = 0;
+        while iterations < self.budget.max_iterations {
+            iterations += 1;
+
+            let assistant = self.provider.complete(system, &turns, &manifests).await?;
+
+            let mut calls: Vec<(String, String, Value)> = Vec::new();
+            let mut text = String::new();
+            for c in &assistant.content {
+                match c {
+                    Content::Text(t) => text.push_str(t),
+                    Content::ToolUse { id, name, input } => {
+                        calls.push((id.clone(), name.clone(), input.clone()))
+                    }
+                    Content::ToolResult { .. } => {}
+                }
+            }
+
+            if calls.is_empty() {
+                return Ok(text);
+            }
+
+            let mut results: Vec<Content> = Vec::new();
+            for (id, name, input) in calls {
+                let r = self.dispatch(&name, ToolInput { args: input }).await;
+                results.push(Content::ToolResult { tool_use_id: id, content: r.content });
+            }
+
+            turns.push(assistant);
+            turns.push(Turn { role: Role::User, content: results });
+        }
+
+        Err(CoreError::BudgetExhausted)
     }
 }

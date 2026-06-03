@@ -16,3 +16,5 @@ tar-proto = { workspace = true }
 tar-llm = { workspace = true }
 tar-tools = { workspace = true }
 tar-policy = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

@@ -9,3 +9,4 @@ description = "LLM providers (Anthropic Messages API; OpenAI-compatible fallback
 tar-core = { workspace = true }
 tar-hal = { workspace = true }
 tar-proto = { workspace = true }
+serde_json = { workspace = true }

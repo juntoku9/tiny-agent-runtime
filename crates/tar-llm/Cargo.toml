@@ -1,0 +1,11 @@
+[package]
+name = "tar-llm"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+description = "LLM providers (Anthropic Messages API; OpenAI-compatible fallback)."
+
+[dependencies]
+tar-core = { workspace = true }
+tar-hal = { workspace = true }
+tar-proto = { workspace = true }

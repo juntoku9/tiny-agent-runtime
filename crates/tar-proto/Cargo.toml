@@ -1,0 +1,10 @@
+[package]
+name = "tar-proto"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+description = "Wire protocol and tool-schema types shared across all nodes."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

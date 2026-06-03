@@ -1,0 +1,8 @@
+[package]
+name = "tar-hal"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+description = "Hardware abstraction layer traits for the Tiny Agent Runtime."
+
+[dependencies]

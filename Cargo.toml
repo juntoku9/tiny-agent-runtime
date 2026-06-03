@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tar-core",
+    "crates/tar-hal",
+    "crates/tar-proto",
+    "crates/tar-llm",
+    "crates/tar-tools",
+    "crates/tar-policy",
+    "platforms/tar-linux",
+    "platforms/tar-esp32",
+    "platforms/tar-node",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+repository = "https://github.com/juntoku9/tiny-agent-runtime"
+
+[workspace.dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+tar-core = { path = "crates/tar-core" }
+tar-hal = { path = "crates/tar-hal" }
+tar-proto = { path = "crates/tar-proto" }
+tar-llm = { path = "crates/tar-llm" }
+tar-tools = { path = "crates/tar-tools" }
+tar-policy = { path = "crates/tar-policy" }

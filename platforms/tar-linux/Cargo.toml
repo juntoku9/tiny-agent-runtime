@@ -1,0 +1,18 @@
+[package]
+name = "tar-linux"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+description = "Linux edge-SoC platform binary — the camera \"brain\"."
+
+[[bin]]
+name = "tar-linux"
+path = "src/main.rs"
+
+[dependencies]
+tar-core = { workspace = true }
+tar-hal = { workspace = true }
+tar-proto = { workspace = true }
+tar-llm = { workspace = true }
+tar-tools = { workspace = true }
+tar-policy = { workspace = true }

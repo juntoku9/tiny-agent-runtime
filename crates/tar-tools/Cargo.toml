@@ -1,0 +1,20 @@
+[package]
+name = "tar-tools"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+description = "Built-in agent tools, each behind a feature flag for constrained builds."
+
+[dependencies]
+tar-core = { workspace = true }
+tar-hal = { workspace = true }
+tar-proto = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = ["gpio"]
+gpio = []
+camera = []
+fs = []
+memory = []
+web_search = []

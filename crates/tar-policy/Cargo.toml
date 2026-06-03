@@ -1,0 +1,8 @@
+[package]
+name = "tar-policy"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+description = "Capability, rate-limit, and confirmation policy gating every tool call."
+
+[dependencies]

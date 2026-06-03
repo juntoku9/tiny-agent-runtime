@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 430" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <rect width="720" height="430" rx="16" fill="#0b0e14"/>
+  <text x="28" y="42" fill="#cdd6f4" font-size="20" font-weight="700">Tiny Agent Runtime — agent loop</text>
+  <text x="28" y="64" fill="#6b7280" font-size="12">live · polling /state</text>
+
+  <!-- iteration 1 -->
+  <rect x="28" y="84" width="664" height="28" rx="9" fill="#11151c" stroke="#2a2f3a" stroke-dasharray="4 3"/>
+  <text x="360" y="102" fill="#7f93b0" font-size="12" font-weight="600" text-anchor="middle">— iteration 1 —</text>
+
+  <!-- tool call 1 -->
+  <rect x="28" y="120" width="664" height="34" rx="10" fill="#241f12" stroke="#4d3f1f"/>
+  <text x="44" y="141" fill="#8a93a6" font-size="10" letter-spacing="0.5">TOOL CALL</text>
+  <text x="118" y="141" fill="#e6c384" font-size="12.5" font-family="ui-monospace, Menlo, monospace">gpio_write({"channel":5,"level":true})</text>
+
+  <!-- result 1 -->
+  <rect x="28" y="162" width="664" height="34" rx="10" fill="#16241a" stroke="#2c4a30"/>
+  <text x="44" y="183" fill="#8a93a6" font-size="10" letter-spacing="0.5">RESULT · gpio_write</text>
+  <text x="190" y="183" fill="#cdd6f4" font-size="12.5" font-family="ui-monospace, Menlo, monospace">set</text>
+
+  <!-- iteration 2 -->
+  <rect x="28" y="204" width="664" height="28" rx="9" fill="#11151c" stroke="#2a2f3a" stroke-dasharray="4 3"/>
+  <text x="360" y="222" fill="#7f93b0" font-size="12" font-weight="600" text-anchor="middle">— iteration 2 —</text>
+
+  <!-- tool call 2 -->
+  <rect x="28" y="240" width="664" height="34" rx="10" fill="#241f12" stroke="#4d3f1f"/>
+  <text x="44" y="261" fill="#8a93a6" font-size="10" letter-spacing="0.5">TOOL CALL</text>
+  <text x="118" y="261" fill="#e6c384" font-size="12.5" font-family="ui-monospace, Menlo, monospace">gpio_read({"channel":5})</text>
+
+  <!-- result 2 -->
+  <rect x="28" y="282" width="664" height="34" rx="10" fill="#16241a" stroke="#2c4a30"/>
+  <text x="44" y="303" fill="#8a93a6" font-size="10" letter-spacing="0.5">RESULT · gpio_read</text>
+  <text x="180" y="303" fill="#a6e3a1" font-size="12.5" font-weight="700" font-family="ui-monospace, Menlo, monospace">1  (HIGH)</text>
+
+  <!-- iteration 3 -->
+  <rect x="28" y="324" width="664" height="28" rx="9" fill="#11151c" stroke="#2a2f3a" stroke-dasharray="4 3"/>
+  <text x="360" y="342" fill="#7f93b0" font-size="12" font-weight="600" text-anchor="middle">— iteration 3 —</text>
+
+  <!-- done -->
+  <rect x="28" y="360" width="664" height="44" rx="10" fill="#1a2440" stroke="#2f3f6f"/>
+  <text x="44" y="386" fill="#8a93a6" font-size="10" letter-spacing="0.5">DONE</text>
+  <text x="92" y="386" fill="#cdd6f4" font-size="13.5" font-weight="600">Pin 5 is HIGH — task complete.</text>
+</svg>

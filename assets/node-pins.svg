@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <rect width="720" height="360" rx="16" fill="#0b0e14"/>
+  <text x="28" y="42" fill="#cdd6f4" font-size="20" font-weight="700">Tiny Agent Runtime</text>
+  <text x="28" y="64" fill="#6b7280" font-size="12">node: node-a · live (polling /state)</text>
+
+  <!-- pin 5 ON -->
+  <rect x="28" y="88" width="100" height="108" rx="14" fill="#1b1f2a" stroke="#2a2f3a"/>
+  <circle cx="78" cy="128" r="28" fill="#a6e3a1" opacity="0.18"/>
+  <circle cx="78" cy="128" r="18" fill="#a6e3a1"/>
+  <text x="78" y="170" fill="#9aa5b1" font-size="12" text-anchor="middle">pin 5</text>
+  <text x="78" y="186" fill="#a6e3a1" font-size="11" font-weight="700" text-anchor="middle">HIGH</text>
+
+  <!-- pin 7 OFF -->
+  <rect x="140" y="88" width="100" height="108" rx="14" fill="#1b1f2a" stroke="#2a2f3a"/>
+  <circle cx="190" cy="128" r="18" fill="#39414f"/>
+  <text x="190" y="170" fill="#9aa5b1" font-size="12" text-anchor="middle">pin 7</text>
+  <text x="190" y="186" fill="#6b7280" font-size="11" text-anchor="middle">LOW</text>
+
+  <!-- pin 13 OFF -->
+  <rect x="252" y="88" width="100" height="108" rx="14" fill="#1b1f2a" stroke="#2a2f3a"/>
+  <circle cx="302" cy="128" r="18" fill="#39414f"/>
+  <text x="302" y="170" fill="#9aa5b1" font-size="12" text-anchor="middle">pin 13</text>
+  <text x="302" y="186" fill="#6b7280" font-size="11" text-anchor="middle">LOW</text>
+
+  <!-- events -->
+  <text x="28" y="232" fill="#9aa5b1" font-size="13" font-weight="600">Events</text>
+  <rect x="28" y="244" width="664" height="92" rx="10" fill="#11151c" stroke="#1b2230"/>
+  <text x="46" y="272" fill="#cdd6f4" font-size="12.5" font-family="ui-monospace, Menlo, monospace">read pin 5 = HIGH</text>
+  <text x="46" y="298" fill="#cdd6f4" font-size="12.5" font-family="ui-monospace, Menlo, monospace">pin 5 -&gt; HIGH</text>
+  <text x="46" y="324" fill="#45506a" font-size="12.5" font-family="ui-monospace, Menlo, monospace">node-a connected</text>
+</svg>

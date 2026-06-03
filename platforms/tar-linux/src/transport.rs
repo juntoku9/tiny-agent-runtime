@@ -35,6 +35,17 @@ impl TcpTransport {
         let (stream, _) = listener.accept().await?;
         Ok(Self::from_stream(stream))
     }
+
+    /// Bind a listener so a node can accept many connections over its lifetime.
+    pub async fn bind(addr: &str) -> std::io::Result<TcpListener> {
+        TcpListener::bind(addr).await
+    }
+
+    /// Accept the next brain connection on an existing listener.
+    pub async fn accept(listener: &TcpListener) -> std::io::Result<Self> {
+        let (stream, _) = listener.accept().await?;
+        Ok(Self::from_stream(stream))
+    }
 }
 
 impl Transport for TcpTransport {

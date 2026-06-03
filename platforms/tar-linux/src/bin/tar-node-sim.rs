@@ -1,6 +1,6 @@
 //! Tool-node simulator (Phase 2): serves GPIO tools over the LAN node protocol,
-//! standing in for a cheap MCU controller chip. Exposes a simulated actuator so
-//! the brain can toggle and read "pins" on a separate process.
+//! standing in for a cheap MCU controller chip. Also serves a live web
+//! dashboard of pin states so you can watch the agent drive the hardware.
 
 use tar_core::node::NodeServer;
 use tar_core::Tool;
@@ -11,25 +11,43 @@ use tar_tools::gpio::{GpioReadTool, GpioTool};
 #[tokio::main]
 async fn main() {
     let addr = std::env::var("TAR_NODE_ADDR").unwrap_or_else(|_| "127.0.0.1:18810".to_string());
-    eprintln!("[node] node-a listening on {}", addr);
+    let dash_addr = std::env::var("TAR_DASH_ADDR").unwrap_or_else(|_| "127.0.0.1:8090".to_string());
 
-    let transport = match TcpTransport::accept_one(&addr).await {
-        Ok(t) => t,
+    // Shared pin state: the tools mutate it, the dashboard reads it.
+    let sim = SimActuator::new();
+
+    {
+        let sim = sim.clone();
+        tokio::spawn(async move { tar_linux::dashboard::serve(dash_addr, sim).await });
+    }
+
+    let listener = match TcpTransport::bind(&addr).await {
+        Ok(l) => l,
         Err(e) => {
-            eprintln!("[node] listen error: {}", e);
+            eprintln!("[node] bind {} failed: {}", addr, e);
             std::process::exit(1);
         }
     };
-    eprintln!("[node] brain connected");
+    eprintln!("[node] node-a listening on {}", addr);
 
-    let sim = SimActuator::new();
-    let tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(GpioTool::new(sim.clone())),
-        Box::new(GpioReadTool::new(sim.clone())),
-    ];
+    // Accept brains one at a time; stay up across runs so the dashboard persists.
+    loop {
+        let transport = match TcpTransport::accept(&listener).await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[node] accept error: {}", e);
+                continue;
+            }
+        };
+        eprintln!("[node] brain connected");
 
-    let server = NodeServer::new("node-a", transport, tools);
-    if let Err(e) = server.serve().await {
-        eprintln!("[node] serve ended: {:?}", e);
+        let tools: Vec<Box<dyn Tool>> = vec![
+            Box::new(GpioTool::new(sim.clone())),
+            Box::new(GpioReadTool::new(sim.clone())),
+        ];
+        let server = NodeServer::new("node-a", transport, tools);
+        if let Err(e) = server.serve().await {
+            eprintln!("[node] brain disconnected ({:?}); waiting for next", e);
+        }
     }
 }

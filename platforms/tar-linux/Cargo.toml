@@ -21,6 +21,10 @@ path = "src/bin/tar-node-sim.rs"
 name = "tar-brain"
 path = "src/bin/tar-brain.rs"
 
+[[bin]]
+name = "tar-agent"
+path = "src/bin/tar-agent.rs"
+
 [dependencies]
 tar-core = { workspace = true }
 tar-hal = { workspace = true }

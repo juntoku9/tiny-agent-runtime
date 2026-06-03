@@ -7,7 +7,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -75,6 +75,24 @@ pub enum CoreError {
 
 pub mod node;
 
+/// Observable events emitted by the agent loop, for logging or visualization.
+/// The core only *emits* these; it performs no I/O itself.
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    Iteration(u8),
+    AssistantText(String),
+    ToolCall { name: String, input: String },
+    ToolResult { name: String, ok: bool, content: String },
+    Finished(String),
+    BudgetExhausted,
+}
+
+/// Receives [`AgentEvent`]s as the loop runs. Implementations just record;
+/// they must not block.
+pub trait Observer: Send + Sync {
+    fn on_event(&self, event: &AgentEvent);
+}
+
 /// Bounds the ReAct loop so a runaway model cannot spend without limit.
 #[derive(Debug, Clone, Copy)]
 pub struct Budget {
@@ -103,11 +121,24 @@ pub struct AgentLoop<P: LlmProvider> {
     provider: P,
     tools: Vec<Box<dyn Tool>>,
     budget: Budget,
+    observer: Option<Box<dyn Observer>>,
 }
 
 impl<P: LlmProvider> AgentLoop<P> {
     pub fn new(provider: P, tools: Vec<Box<dyn Tool>>) -> Self {
-        Self { provider, tools, budget: Budget::default() }
+        Self { provider, tools, budget: Budget::default(), observer: None }
+    }
+
+    /// Attach an observer that receives [`AgentEvent`]s as the loop runs.
+    pub fn with_observer(mut self, observer: Box<dyn Observer>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    fn emit(&self, event: AgentEvent) {
+        if let Some(o) = &self.observer {
+            o.on_event(&event);
+        }
     }
 
     /// Tool manifests advertised to the provider, built from the live registry.
@@ -141,6 +172,7 @@ impl<P: LlmProvider> AgentLoop<P> {
         let mut iterations: u8 = 0;
         while iterations < self.budget.max_iterations {
             iterations += 1;
+            self.emit(AgentEvent::Iteration(iterations));
 
             let assistant = self.provider.complete(system, &turns, &manifests).await?;
 
@@ -155,14 +187,24 @@ impl<P: LlmProvider> AgentLoop<P> {
                     Content::ToolResult { .. } => {}
                 }
             }
+            if !text.is_empty() {
+                self.emit(AgentEvent::AssistantText(text.clone()));
+            }
 
             if calls.is_empty() {
+                self.emit(AgentEvent::Finished(text.clone()));
                 return Ok(text);
             }
 
             let mut results: Vec<Content> = Vec::new();
             for (id, name, input) in calls {
+                self.emit(AgentEvent::ToolCall { name: name.clone(), input: input.to_string() });
                 let r = self.dispatch(&name, ToolInput { args: input }).await;
+                self.emit(AgentEvent::ToolResult {
+                    name: name.clone(),
+                    ok: r.ok,
+                    content: r.content.clone(),
+                });
                 results.push(Content::ToolResult { tool_use_id: id, content: r.content });
             }
 
@@ -170,6 +212,7 @@ impl<P: LlmProvider> AgentLoop<P> {
             turns.push(Turn { role: Role::User, content: results });
         }
 
+        self.emit(AgentEvent::BudgetExhausted);
         Err(CoreError::BudgetExhausted)
     }
 }

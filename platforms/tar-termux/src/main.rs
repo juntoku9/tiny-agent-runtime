@@ -292,6 +292,121 @@ fn make_anthropic(key: String, model: String) -> tar_llm::AnthropicProvider<clou
     tar_llm::AnthropicProvider::new(cloud::TermuxHttp::new(), key, model)
 }
 
+// ---- Telegram channel -----------------------------------------------------
+//
+// Long-poll getUpdates, run each message through the agent loop (with the phone
+// tools available), reply with sendMessage. Restricted by a chat-id allowlist.
+
+#[cfg(feature = "cloud")]
+mod telegram {
+    use serde_json::{json, Value};
+    use std::time::Duration;
+
+    pub struct Update {
+        pub update_id: i64,
+        pub chat_id: i64,
+        pub text: String,
+    }
+
+    pub async fn get_updates(
+        client: &reqwest::Client,
+        token: &str,
+        offset: i64,
+    ) -> Result<Vec<Update>, String> {
+        let url = format!("https://api.telegram.org/bot{token}/getUpdates?timeout=30&offset={offset}");
+        let body = client
+            .get(&url)
+            .timeout(Duration::from_secs(40))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .text()
+            .await
+            .map_err(|e| e.to_string())?;
+        let v: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for u in v.get("result").and_then(|r| r.as_array()).into_iter().flatten() {
+            let update_id = u.get("update_id").and_then(|x| x.as_i64()).unwrap_or(0);
+            let (chat_id, text) = u
+                .get("message")
+                .map(|m| {
+                    (
+                        m.get("chat").and_then(|c| c.get("id")).and_then(|x| x.as_i64()).unwrap_or(0),
+                        m.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                    )
+                })
+                .unwrap_or((0, String::new()));
+            out.push(Update { update_id, chat_id, text });
+        }
+        Ok(out)
+    }
+
+    pub async fn send_message(
+        client: &reqwest::Client,
+        token: &str,
+        chat_id: i64,
+        text: &str,
+    ) -> Result<(), String> {
+        let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+        client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(json!({ "chat_id": chat_id, "text": text }).to_string())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "cloud")]
+fn parse_allow(s: Option<String>) -> Vec<i64> {
+    s.map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "cloud")]
+async fn run_telegram(token: String, key: String, model: String, allow: Vec<i64>) {
+    let client = reqwest::Client::new();
+    let system = "You are a tiny agent running on an Android phone via Termux. You can read the \
+                  ambient light sensor (read_light) and control the phone's flashlight (flashlight). \
+                  Be concise and friendly. Use the tools when asked about light or to toggle the light.";
+    log("tg", "Telegram bot is live — message your bot now. (Ctrl+C to stop.)");
+    let mut offset: i64 = 0;
+    loop {
+        let updates = match telegram::get_updates(&client, &token, offset).await {
+            Ok(u) => u,
+            Err(e) => {
+                log("tg", format!("getUpdates error: {e} — retrying in 3s"));
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        for u in updates {
+            offset = u.update_id + 1;
+            if u.text.is_empty() {
+                continue;
+            }
+            log("tg", format!("<- [{}] {}", u.chat_id, u.text));
+            if !allow.is_empty() && !allow.contains(&u.chat_id) {
+                log("tg", format!("chat {} not in allowlist — ignored", u.chat_id));
+                let _ = telegram::send_message(&client, &token, u.chat_id, "Not authorized.").await;
+                continue;
+            }
+            let tools: Vec<Box<dyn Tool>> = vec![Box::new(LightSensorTool), Box::new(FlashlightTool)];
+            let agent = AgentLoop::new(make_anthropic(key.clone(), model.clone()), tools)
+                .with_observer(Box::new(Printer));
+            let reply = match agent.run(system, &u.text).await {
+                Ok(t) if !t.trim().is_empty() => t,
+                Ok(_) => "(done)".to_string(),
+                Err(e) => format!("error: {e:?}"),
+            };
+            log("tg", format!("-> [{}] {}", u.chat_id, reply));
+            let _ = telegram::send_message(&client, &token, u.chat_id, &reply).await;
+        }
+    }
+}
+
 // ---- Loop plumbing --------------------------------------------------------
 
 struct Printer;
@@ -348,6 +463,27 @@ async fn main() {
     };
     #[cfg(not(feature = "cloud"))]
     log("brain", "LOCAL REFLEX — NO LLM is called (offline). Rebuild with `--features cloud` + ANTHROPIC_API_KEY for a real LLM.");
+
+    // Telegram mode: if a bot token is set, chat with the agent instead of the
+    // local flashlight cycle. Needs the cloud LLM (and the `cloud` feature).
+    #[cfg(feature = "cloud")]
+    if let Some((key, model)) = cloud.clone() {
+        if let Ok(token) = env::var("TAR_TG_TOKEN") {
+            if !token.is_empty() {
+                let allow = parse_allow(env::var("TAR_TG_ALLOW").ok());
+                if allow.is_empty() {
+                    log("tg", "WARNING: TAR_TG_ALLOW not set — anyone who finds your bot can use it.");
+                    log("tg", "Message it once; its chat id is logged so you can set TAR_TG_ALLOW=<id>.");
+                }
+                run_telegram(token, key, model, allow).await;
+                return;
+            }
+        }
+    }
+    #[cfg(feature = "cloud")]
+    if env::var("TAR_TG_TOKEN").is_ok() && cloud.is_none() {
+        log("tg", "TAR_TG_TOKEN is set but ANTHROPIC_API_KEY is missing — Telegram mode needs both.");
+    }
 
     let system = format!(
         "You control a phone via two tools: read_light (returns ambient lux) and \

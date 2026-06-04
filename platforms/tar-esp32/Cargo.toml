@@ -3,6 +3,7 @@ name = "tar-esp32"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "ESP32 platform crate (esp-idf-svc HAL impls land in Phase 1)."
 
 [dependencies]

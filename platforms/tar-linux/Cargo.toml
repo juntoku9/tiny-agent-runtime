@@ -3,6 +3,7 @@ name = "tar-linux"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "Linux edge-SoC platform — the camera \"brain\" and a tool-node simulator."
 
 [lib]

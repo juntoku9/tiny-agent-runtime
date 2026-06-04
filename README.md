@@ -8,7 +8,7 @@
 ![target](https://img.shields.io/badge/target-edge%20%2B%20IoT-89b4fa)
 ![inference](https://img.shields.io/badge/inference-cloud%20LLM-a6e3a1)
 ![status](https://img.shields.io/badge/status-early%20development-e6c384)
-![license](https://img.shields.io/badge/license-TBD-6b7280)
+![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-a6e3a1)
 
 **One Rust core runs on a $5 microcontroller _or_ a Linux camera SoC.**
 It talks to a cloud LLM for intelligence and lets **any IoT chip register itself as a tool the agent controls** — a relay, a sensor, a camera, a lock.
@@ -181,6 +181,21 @@ Early development, built in verifiable phases:
 - ⏳ Policy enforcement · camera perception · ESP32 on real hardware
 
 See **[docs/ROADMAP.md](docs/ROADMAP.md)** for the phased plan and per-phase success criteria.
+
+---
+
+## 📄 License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
 
 ---
 

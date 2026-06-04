@@ -3,6 +3,7 @@ name = "tar-node"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "Minimal tool-node firmware crate — the low-cost controller chip."
 
 [dependencies]

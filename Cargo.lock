@@ -847,6 +847,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar-termux"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tar-core",
+ "tar-proto",
+ "tokio",
+]
+
+[[package]]
 name = "tar-tools"
 version = "0.0.0"
 dependencies = [

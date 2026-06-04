@@ -1,0 +1,17 @@
+[package]
+name = "tar-termux"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Android/Termux demo — the agent loop drives the phone flashlight from its light sensor."
+
+[[bin]]
+name = "tar-termux"
+path = "src/main.rs"
+
+[dependencies]
+tar-core = { workspace = true }
+tar-proto = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt", "time"] }

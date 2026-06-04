@@ -5,13 +5,14 @@
 //!   * default build → a local *reflex* rule. NO LLM is called (offline).
 //!   * `--features cloud` + ANTHROPIC_API_KEY → a real cloud LLM decides.
 //!
-//! Verbose logging shows every command, its raw output, and which brain runs.
+//! Every external command runs with a timeout and verbose logging, so a
+//! missing/unpermitted Termux:API app can't freeze the demo — it reports why.
 
 use std::cell::Cell;
 use std::env;
 use std::future::Future;
 use std::pin::Pin;
-use std::process::Command;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -26,7 +27,7 @@ fn log(tag: &str, msg: impl AsRef<str>) {
     println!("[{tag}] {}", msg.as_ref());
 }
 
-// ---- Termux:API helpers (with verbose logging) ----------------------------
+// ---- command runner with a timeout ----------------------------------------
 
 fn have(cmd: &str) -> bool {
     Command::new("sh")
@@ -37,13 +38,29 @@ fn have(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn torch(on: bool) -> Result<(), String> {
+/// Run a command in a blocking thread with a timeout, so a hung Termux:API
+/// call (missing or unpermitted app) can't freeze the whole demo.
+async fn run_cmd(cmd: &str, args: &[&str], timeout_s: u64) -> Result<Output, String> {
+    let cmd_s = cmd.to_string();
+    let args_v: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let job = tokio::task::spawn_blocking(move || Command::new(&cmd_s).args(&args_v).output());
+    match tokio::time::timeout(Duration::from_secs(timeout_s), job).await {
+        Ok(Ok(Ok(out))) => Ok(out),
+        Ok(Ok(Err(e))) => Err(format!("could not run {cmd} ({e})")),
+        Ok(Err(e)) => Err(format!("task error ({e})")),
+        Err(_) => Err(format!(
+            "timed out after {timeout_s}s — the Termux:API APP is likely not installed or not \
+             permitted (grant it Camera + Sensors in Android settings)"
+        )),
+    }
+}
+
+// ---- Termux:API helpers ---------------------------------------------------
+
+async fn torch(on: bool) -> Result<(), String> {
     let arg = if on { "on" } else { "off" };
     log("cmd", format!("termux-torch {arg}"));
-    let out = Command::new("termux-torch")
-        .arg(arg)
-        .output()
-        .map_err(|e| format!("could not run termux-torch ({e}) — is the Termux:API app installed?"))?;
+    let out = run_cmd("termux-torch", &[arg], 6).await?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !stderr.trim().is_empty() {
         log("torch.stderr", stderr.trim());
@@ -56,10 +73,15 @@ fn torch(on: bool) -> Result<(), String> {
     }
 }
 
-/// Run termux-sensor with the given args and pull out the first light reading.
-fn try_read(args: &[&str]) -> Option<f64> {
+async fn try_read(args: &[&str]) -> Option<f64> {
     log("cmd", format!("termux-sensor {}", args.join(" ")));
-    let out = Command::new("termux-sensor").args(args).output().ok()?;
+    let out = match run_cmd("termux-sensor", args, 8).await {
+        Ok(o) => o,
+        Err(e) => {
+            log("sensor", e);
+            return None;
+        }
+    };
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !stderr.trim().is_empty() {
@@ -96,12 +118,12 @@ fn try_read(args: &[&str]) -> Option<f64> {
     light_value.or(any_value)
 }
 
-fn read_lux() -> Result<f64, String> {
-    if let Some(l) = try_read(&["-s", "light", "-n", "1"]) {
+async fn read_lux() -> Result<f64, String> {
+    if let Some(l) = try_read(&["-s", "light", "-n", "1"]).await {
         return Ok(l);
     }
     log("sensor", "no 'light' match — scanning all sensors (-a)...");
-    if let Some(l) = try_read(&["-a", "-n", "1"]) {
+    if let Some(l) = try_read(&["-a", "-n", "1"]).await {
         return Ok(l);
     }
     Err("could not read a light value — is the Termux:API app installed and permitted?".into())
@@ -127,7 +149,7 @@ impl Tool for FlashlightTool {
     fn call<'a>(&'a self, input: ToolInput) -> Pin<Box<dyn Future<Output = ToolResult> + 'a>> {
         Box::pin(async move {
             let on = input.args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
-            match torch(on) {
+            match torch(on).await {
                 Ok(()) => ToolResult {
                     ok: true,
                     content: if on { "flashlight ON".into() } else { "flashlight OFF".into() },
@@ -151,7 +173,7 @@ impl Tool for LightSensorTool {
 
     fn call<'a>(&'a self, _input: ToolInput) -> Pin<Box<dyn Future<Output = ToolResult> + 'a>> {
         Box::pin(async move {
-            match read_lux() {
+            match read_lux().await {
                 Ok(lux) => ToolResult { ok: true, content: format!("{lux:.1} lux") },
                 Err(e) => ToolResult { ok: false, content: e },
             }
@@ -305,17 +327,13 @@ async fn main() {
     log("info", "Tiny Agent Runtime — Termux flashlight demo");
     log("info", format!("dark threshold = {dark_lux:.0} lux; cover the light sensor to make it dark"));
 
-    // Environment diagnostics — this is usually where "nothing happens" gets explained.
     let have_torch = have("termux-torch");
     let have_sensor = have("termux-sensor");
-    log("check", format!("termux-torch installed:  {have_torch}"));
-    log("check", format!("termux-sensor installed: {have_sensor}"));
-    if !have_torch || !have_sensor {
-        log("check", "MISSING. Run:  pkg install -y termux-api");
-        log("check", "AND install the 'Termux:API' app from F-Droid (separate from the package).");
-    }
+    log("check", format!("termux-torch command:  {have_torch}"));
+    log("check", format!("termux-sensor command: {have_sensor}"));
+    log("check", "NOTE: the commands existing is NOT enough — the Termux:API *app* must also be");
+    log("check", "installed from F-Droid and granted Camera + Sensors permission, or calls hang.");
 
-    // Which brain?
     #[cfg(feature = "cloud")]
     let cloud = match env::var("ANTHROPIC_API_KEY") {
         Ok(k) if !k.is_empty() => {
@@ -338,12 +356,11 @@ async fn main() {
          correct state, then briefly state the result."
     );
 
-    // Self-test so you can see the hardware respond before the agent runs.
-    log("selftest", "blinking flashlight for 0.7s...");
-    let _ = torch(true);
+    log("selftest", "blinking flashlight for 0.7s (watch for the light)...");
+    let _ = torch(true).await;
     tokio::time::sleep(Duration::from_millis(700)).await;
-    let _ = torch(false);
-    match read_lux() {
+    let _ = torch(false).await;
+    match read_lux().await {
         Ok(l) => log("selftest", format!("ambient light = {l:.1} lux")),
         Err(e) => log("selftest", format!("light read FAILED: {e}")),
     }
@@ -361,6 +378,6 @@ async fn main() {
         tokio::time::sleep(Duration::from_secs(4)).await;
     }
 
-    let _ = torch(false);
+    let _ = torch(false).await;
     log("done", "tune with TAR_CYCLES=<n> TAR_DARK_LUX=<lux>");
 }

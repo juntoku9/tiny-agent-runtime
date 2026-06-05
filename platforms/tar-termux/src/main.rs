@@ -308,22 +308,45 @@ mod telegram {
         pub text: String,
     }
 
+    /// Verify the token; returns the bot's @username on success.
+    pub async fn get_me(client: &reqwest::Client, token: &str) -> Result<String, String> {
+        let url = format!("https://api.telegram.org/bot{token}/getMe");
+        let resp = client.get(&url).timeout(Duration::from_secs(15)).send().await.map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let body = resp.text().await.map_err(|e| e.to_string())?;
+        let v: Value = serde_json::from_str(&body).map_err(|_| format!("HTTP {status}: {body}"))?;
+        if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
+            let desc = v.get("description").and_then(|x| x.as_str()).unwrap_or("unknown");
+            return Err(format!("HTTP {status}: {desc} (is the token correct?)"));
+        }
+        Ok(v.get("result").and_then(|r| r.get("username")).and_then(|x| x.as_str()).unwrap_or("?").to_string())
+    }
+
+    /// Remove any webhook so getUpdates works (a set webhook causes 409s).
+    pub async fn delete_webhook(client: &reqwest::Client, token: &str) {
+        let url = format!("https://api.telegram.org/bot{token}/deleteWebhook");
+        let _ = client.get(&url).timeout(Duration::from_secs(15)).send().await;
+    }
+
     pub async fn get_updates(
         client: &reqwest::Client,
         token: &str,
         offset: i64,
     ) -> Result<Vec<Update>, String> {
         let url = format!("https://api.telegram.org/bot{token}/getUpdates?timeout=30&offset={offset}");
-        let body = client
+        let resp = client
             .get(&url)
             .timeout(Duration::from_secs(40))
             .send()
             .await
-            .map_err(|e| e.to_string())?
-            .text()
-            .await
             .map_err(|e| e.to_string())?;
-        let v: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let body = resp.text().await.map_err(|e| e.to_string())?;
+        let v: Value = serde_json::from_str(&body).map_err(|_| format!("HTTP {status}: {body}"))?;
+        if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
+            let desc = v.get("description").and_then(|x| x.as_str()).unwrap_or("unknown");
+            return Err(format!("Telegram error (HTTP {status}): {desc}"));
+        }
         let mut out = Vec::new();
         for u in v.get("result").and_then(|r| r.as_array()).into_iter().flatten() {
             let update_id = u.get("update_id").and_then(|x| x.as_i64()).unwrap_or(0);
@@ -371,8 +394,19 @@ async fn run_telegram(token: String, key: String, model: String, allow: Vec<i64>
     let system = "You are a tiny agent running on an Android phone via Termux. You can read the \
                   ambient light sensor (read_light) and control the phone's flashlight (flashlight). \
                   Be concise and friendly. Use the tools when asked about light or to toggle the light.";
-    log("tg", "Telegram bot is live — message your bot now. (Ctrl+C to stop.)");
+    log("tg", "checking bot token (getMe)...");
+    match telegram::get_me(&client, &token).await {
+        Ok(name) => log("tg", format!("token OK — bot is @{name}")),
+        Err(e) => {
+            log("tg", format!("TOKEN/NETWORK ERROR: {e}"));
+            log("tg", "fix the token (from @BotFather) and re-run. Stopping.");
+            return;
+        }
+    }
+    telegram::delete_webhook(&client, &token).await;
+    log("tg", "live — message your bot now. (Ctrl+C to stop.)");
     let mut offset: i64 = 0;
+    let mut polls: u64 = 0;
     loop {
         let updates = match telegram::get_updates(&client, &token, offset).await {
             Ok(u) => u,
@@ -382,6 +416,14 @@ async fn run_telegram(token: String, key: String, model: String, allow: Vec<i64>
                 continue;
             }
         };
+        polls += 1;
+        if updates.is_empty() {
+            if polls % 4 == 0 {
+                log("tg", "still listening (no messages yet)...");
+            }
+        } else {
+            log("tg", format!("received {} update(s)", updates.len()));
+        }
         for u in updates {
             offset = u.update_id + 1;
             if u.text.is_empty() {

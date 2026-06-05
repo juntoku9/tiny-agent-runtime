@@ -170,35 +170,41 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Decode -> resize (fit within `max`px) -> re-encode JPEG, so the request is
+/// small enough for the LLM and valid for Telegram. Pure Rust, no ImageMagick.
+fn resize_jpeg(bytes: &[u8], max: u32) -> Result<Vec<u8>, String> {
+    let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let img = img.resize(max, max, image::imageops::FilterType::Triangle);
+    let mut buf = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+        .map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
 /// Capture a photo with the phone camera; returns (jpeg bytes, file path).
-/// Downscales via ImageMagick `convert` if available, to keep the request small.
 async fn capture_photo() -> Result<(Vec<u8>, std::path::PathBuf), String> {
     let cam = env::var("TAR_CAMERA").unwrap_or_else(|_| "0".into());
     let raw = std::env::temp_dir().join("tar_raw.jpg");
     let raw_s = raw.to_string_lossy().to_string();
-    log("cam", format!("termux-camera-photo -c {cam}"));
-    run_cmd("termux-camera-photo", &["-c", &cam, &raw_s], 25).await?;
+    log("cam", format!("termux-camera-photo -c {cam} (up to 60s)..."));
+    run_cmd("termux-camera-photo", &["-c", &cam, &raw_s], 60).await?;
     let raw_bytes = std::fs::read(&raw).map_err(|e| format!("read photo: {e}"))?;
     if raw_bytes.is_empty() {
         return Err("camera produced an empty file (permission? camera in use?)".into());
     }
-    if have("convert") {
-        let small = std::env::temp_dir().join("tar_snapshot.jpg");
-        let small_s = small.to_string_lossy().to_string();
-        if run_cmd("convert", &[&raw_s, "-resize", "1024x1024>", "-quality", "80", &small_s], 20)
-            .await
-            .is_ok()
-        {
-            if let Ok(b) = std::fs::read(&small) {
-                if !b.is_empty() {
-                    log("cam", format!("captured {} bytes (resized)", b.len()));
-                    return Ok((b, small));
-                }
-            }
+    log("cam", format!("captured {} bytes; resizing...", raw_bytes.len()));
+    match resize_jpeg(&raw_bytes, 1024) {
+        Ok(small) => {
+            let out = std::env::temp_dir().join("tar_snapshot.jpg");
+            let _ = std::fs::write(&out, &small);
+            log("cam", format!("resized to {} bytes", small.len()));
+            Ok((small, out))
+        }
+        Err(e) => {
+            log("cam", format!("resize failed ({e}); using raw image"));
+            Ok((raw_bytes, raw))
         }
     }
-    log("cam", format!("captured {} bytes", raw_bytes.len()));
-    Ok((raw_bytes, raw))
 }
 
 fn wants_vision(text: &str) -> bool {
@@ -520,19 +526,25 @@ impl tar_hal::HttpClient for CurlHttp {
     ) -> impl Future<Output = tar_hal::HalResult<tar_hal::HttpResponse>> {
         let url = url.to_string();
         let header_strs: Vec<String> = headers.iter().map(|(k, v)| format!("{k}: {v}")).collect();
-        let body_str = String::from_utf8_lossy(body).to_string();
-        log("llm", format!("curl POST {url}"));
+        let body_vec = body.to_vec();
+        log("llm", format!("curl POST {url} ({} byte body)", body_vec.len()));
         async move {
-            let mut args: Vec<&str> = vec!["-s", "--max-time", "60", "-X", "POST", &url];
+            // Write the body to a temp file — a vision request (base64 image) is
+            // far too large to pass as an argv argument (ARG_MAX / "Argument list too long").
+            let tmp = std::env::temp_dir().join("tar_llm_req.json");
+            std::fs::write(&tmp, &body_vec)
+                .map_err(|e| tar_hal::HalError::Io(format!("write request body: {e}")))?;
+            let data_arg = format!("@{}", tmp.to_string_lossy());
+            let mut args: Vec<&str> = vec!["-s", "--max-time", "120", "-X", "POST", &url];
             for h in &header_strs {
                 args.push("-H");
                 args.push(h);
             }
             args.push("--data-binary");
-            args.push(&body_str);
+            args.push(&data_arg);
             args.push("-w");
             args.push("\n%{http_code}");
-            let out = run_cmd("curl", &args, 65).await.map_err(tar_hal::HalError::Io)?;
+            let out = run_cmd("curl", &args, 125).await.map_err(tar_hal::HalError::Io)?;
             let combined = String::from_utf8_lossy(&out.stdout);
             let (body_part, status) = match combined.rfind('\n') {
                 Some(i) => (combined[..i].to_string(), combined[i + 1..].trim().parse().unwrap_or(0u16)),

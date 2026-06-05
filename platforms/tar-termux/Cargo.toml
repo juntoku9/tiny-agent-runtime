@@ -17,3 +17,4 @@ tar-hal = { workspace = true }
 tar-llm = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

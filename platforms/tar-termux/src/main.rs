@@ -392,13 +392,14 @@ mod telegram {
         let url = format!("https://api.telegram.org/bot{token}/sendMessage");
         let chat = format!("chat_id={chat_id}");
         let txt = format!("text={text}");
-        run_cmd(
+        let out = run_cmd(
             "curl",
             &["-s", "--max-time", "15", &url, "--data-urlencode", &chat, "--data-urlencode", &txt],
             20,
         )
         .await?;
-        Ok(())
+        let body = String::from_utf8_lossy(&out.stdout);
+        ok_or_err(&body).map(|_| ())
     }
 }
 
@@ -548,7 +549,10 @@ async fn run_telegram(token: String, dark_lux: f64) {
             }
             let reply = handle_message(&u.text, dark_lux).await;
             log("tg", format!("-> [{}] {}", u.chat_id, reply));
-            let _ = telegram::send_message(&token, u.chat_id, &reply).await;
+            match telegram::send_message(&token, u.chat_id, &reply).await {
+                Ok(()) => log("tg", "reply sent OK"),
+                Err(e) => log("tg", format!("SEND FAILED: {e}")),
+            }
         }
     }
 }

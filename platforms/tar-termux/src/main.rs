@@ -120,14 +120,31 @@ async fn try_read(args: &[&str]) -> Option<f64> {
     light_value.or(any_value)
 }
 
-async fn read_lux() -> Result<f64, String> {
+async fn read_once() -> Option<f64> {
     if let Some(l) = try_read(&["-s", "light", "-n", "1"]).await {
-        return Ok(l);
+        return Some(l);
     }
-    if let Some(l) = try_read(&["-a", "-n", "1"]).await {
-        return Ok(l);
+    try_read(&["-a", "-n", "1"]).await
+}
+
+async fn read_lux() -> Result<f64, String> {
+    // termux-sensor's first sample is often a stale 0; retry for a live value.
+    let mut last: Option<f64> = None;
+    for attempt in 0..5 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        if let Some(x) = read_once().await {
+            last = Some(x);
+            if x > 0.0 {
+                return Ok(x);
+            }
+            log("sensor", format!("got 0.0 (attempt {}/5) — retrying for a live value", attempt + 1));
+        }
     }
-    Err("could not read a light value — is the Termux:API app installed and permitted?".into())
+    last.ok_or_else(|| {
+        "could not read a light value — is the Termux:API app installed and permitted?".to_string()
+    })
 }
 
 // ---- Tools ----------------------------------------------------------------

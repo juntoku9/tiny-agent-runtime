@@ -30,6 +30,8 @@ pub enum Role {
 #[derive(Debug, Clone)]
 pub enum Content {
     Text(String),
+    /// A base64-encoded image (e.g. a camera snapshot) for vision models.
+    Image { media_type: String, data: String },
     ToolUse { id: String, name: String, input: Value },
     ToolResult { tool_use_id: String, content: String },
 }
@@ -162,12 +164,18 @@ impl<P: LlmProvider> AgentLoop<P> {
     /// blocks, execute them, append the assistant turn and a `tool_result`
     /// turn, and loop; otherwise return the concatenated assistant text.
     pub async fn run(&self, system: &str, user_text: &str) -> Result<String, CoreError> {
+        let mut content = Vec::new();
+        content.push(Content::Text(String::from(user_text)));
+        self.run_content(system, content).await
+    }
+
+    /// Run the loop, seeding the first user turn with arbitrary content — e.g.
+    /// text plus an image, for vision.
+    pub async fn run_content(&self, system: &str, content: Vec<Content>) -> Result<String, CoreError> {
         let manifests = self.manifests();
 
-        let mut first = Vec::new();
-        first.push(Content::Text(String::from(user_text)));
         let mut turns: Vec<Turn> = Vec::new();
-        turns.push(Turn { role: Role::User, content: first });
+        turns.push(Turn { role: Role::User, content });
 
         let mut iterations: u8 = 0;
         while iterations < self.budget.max_iterations {
@@ -185,6 +193,7 @@ impl<P: LlmProvider> AgentLoop<P> {
                         calls.push((id.clone(), name.clone(), input.clone()))
                     }
                     Content::ToolResult { .. } => {}
+                    Content::Image { .. } => {}
                 }
             }
             if !text.is_empty() {

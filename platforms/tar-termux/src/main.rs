@@ -34,6 +34,11 @@ const LLM_SYSTEM: &str = "You are a witty little AI living inside an Android pho
     short, friendly sentence. For anything else, just chat briefly. You are running on the device \
     itself — own it.";
 
+// System prompt for vision (when the user asks the agent to look through the camera).
+const VISION_SYSTEM: &str = "You are the eyes of a tiny agent living in a phone. You are given a \
+    photo from the phone's camera. Describe what you see concisely and naturally, focusing on what \
+    matters; if the user asked a specific question, answer it directly.";
+
 fn log(tag: &str, msg: impl AsRef<str>) {
     println!("[{tag}] {}", msg.as_ref());
 }
@@ -145,6 +150,65 @@ async fn read_lux() -> Result<f64, String> {
     last.ok_or_else(|| {
         "could not read a light value — is the Termux:API app installed and permitted?".to_string()
     })
+}
+
+// ---- Camera (vision) ------------------------------------------------------
+
+fn base64_encode(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        let n = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// Capture a photo with the phone camera; returns (jpeg bytes, file path).
+/// Downscales via ImageMagick `convert` if available, to keep the request small.
+async fn capture_photo() -> Result<(Vec<u8>, std::path::PathBuf), String> {
+    let cam = env::var("TAR_CAMERA").unwrap_or_else(|_| "0".into());
+    let raw = std::env::temp_dir().join("tar_raw.jpg");
+    let raw_s = raw.to_string_lossy().to_string();
+    log("cam", format!("termux-camera-photo -c {cam}"));
+    run_cmd("termux-camera-photo", &["-c", &cam, &raw_s], 25).await?;
+    let raw_bytes = std::fs::read(&raw).map_err(|e| format!("read photo: {e}"))?;
+    if raw_bytes.is_empty() {
+        return Err("camera produced an empty file (permission? camera in use?)".into());
+    }
+    if have("convert") {
+        let small = std::env::temp_dir().join("tar_snapshot.jpg");
+        let small_s = small.to_string_lossy().to_string();
+        if run_cmd("convert", &[&raw_s, "-resize", "1024x1024>", "-quality", "80", &small_s], 20)
+            .await
+            .is_ok()
+        {
+            if let Ok(b) = std::fs::read(&small) {
+                if !b.is_empty() {
+                    log("cam", format!("captured {} bytes (resized)", b.len()));
+                    return Ok((b, small));
+                }
+            }
+        }
+    }
+    log("cam", format!("captured {} bytes", raw_bytes.len()));
+    Ok((raw_bytes, raw))
+}
+
+fn wants_vision(text: &str) -> bool {
+    let t = text.to_lowercase();
+    [
+        "what do you see", "do you see", "look", "photo", "picture", "camera",
+        "describe", "snapshot", "take a pic", "in front", "who is", "who's there",
+    ]
+    .iter()
+    .any(|k| t.contains(k))
 }
 
 // ---- Tools ----------------------------------------------------------------
@@ -418,6 +482,21 @@ mod telegram {
         let body = String::from_utf8_lossy(&out.stdout);
         ok_or_err(&body).map(|_| ())
     }
+
+    pub async fn send_photo(token: &str, chat_id: i64, path: &str, caption: &str) -> Result<(), String> {
+        let url = format!("https://api.telegram.org/bot{token}/sendPhoto");
+        let chat = format!("chat_id={chat_id}");
+        let photo = format!("photo=@{path}");
+        let cap = format!("caption={caption}");
+        let out = run_cmd(
+            "curl",
+            &["-s", "--max-time", "60", &url, "-F", &chat, "-F", &photo, "-F", &cap],
+            65,
+        )
+        .await?;
+        let body = String::from_utf8_lossy(&out.stdout);
+        ok_or_err(&body).map(|_| ())
+    }
 }
 
 fn parse_allow(s: Option<String>) -> Vec<i64> {
@@ -498,15 +577,53 @@ async fn finish<P: LlmProvider>(provider: P, system: &str, text: &str) -> String
     }
 }
 
-async fn handle_message(text: &str, dark_lux: f64) -> String {
-    // Real LLM agent when a key is set; deterministic command brain otherwise.
-    if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
-        if !key.is_empty() {
-            let model = env::var("TAR_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".into());
-            return finish(make_anthropic(key, model), LLM_SYSTEM, text).await;
-        }
+enum Reply {
+    Text(String),
+    Photo { path: String, caption: String },
+}
+
+/// Vision: capture a photo, send it to the LLM with the question, return the
+/// description as a photo caption (so Telegram shows what the agent saw).
+async fn handle_vision(text: &str, key: String) -> Reply {
+    log("cam", "vision request — capturing photo...");
+    let (bytes, path) = match capture_photo().await {
+        Ok(x) => x,
+        Err(e) => return Reply::Text(format!("Camera error: {e}")),
+    };
+    let model = env::var("TAR_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".into());
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(LightSensorTool), Box::new(FlashlightTool)];
+    let agent = AgentLoop::new(make_anthropic(key, model), tools).with_observer(Box::new(Printer));
+    let question = if text.trim().is_empty() { "What do you see?" } else { text };
+    let content = vec![
+        Content::Text(question.to_string()),
+        Content::Image { media_type: "image/jpeg".into(), data: base64_encode(&bytes) },
+    ];
+    let caption = match agent.run_content(VISION_SYSTEM, content).await {
+        Ok(t) if !t.trim().is_empty() => t,
+        Ok(_) => "(no description)".into(),
+        Err(e) => format!("error: {e:?}"),
+    };
+    let caption: String = caption.chars().take(1000).collect(); // Telegram caption limit
+    Reply::Photo { path: path.to_string_lossy().to_string(), caption }
+}
+
+async fn handle_message(text: &str, dark_lux: f64) -> Reply {
+    let key = env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty());
+
+    // Vision needs the cloud model.
+    if wants_vision(text) {
+        return match key {
+            Some(k) => handle_vision(text, k).await,
+            None => Reply::Text("I'd need an ANTHROPIC_API_KEY to use the camera 📷".into()),
+        };
     }
-    finish(CommandReflexProvider { step: Cell::new(0), dark_lux }, "", text).await
+
+    // Real LLM agent when a key is set; deterministic command brain otherwise.
+    if let Some(k) = key {
+        let model = env::var("TAR_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".into());
+        return Reply::Text(finish(make_anthropic(k, model), LLM_SYSTEM, text).await);
+    }
+    Reply::Text(finish(CommandReflexProvider { step: Cell::new(0), dark_lux }, "", text).await)
 }
 
 async fn run_telegram(token: String, dark_lux: f64) {
@@ -564,11 +681,21 @@ async fn run_telegram(token: String, dark_lux: f64) {
                 let _ = telegram::send_message(&token, u.chat_id, "Not authorized.").await;
                 continue;
             }
-            let reply = handle_message(&u.text, dark_lux).await;
-            log("tg", format!("-> [{}] {}", u.chat_id, reply));
-            match telegram::send_message(&token, u.chat_id, &reply).await {
-                Ok(()) => log("tg", "reply sent OK"),
-                Err(e) => log("tg", format!("SEND FAILED: {e}")),
+            match handle_message(&u.text, dark_lux).await {
+                Reply::Text(t) => {
+                    log("tg", format!("-> [{}] {}", u.chat_id, t));
+                    match telegram::send_message(&token, u.chat_id, &t).await {
+                        Ok(()) => log("tg", "reply sent OK"),
+                        Err(e) => log("tg", format!("SEND FAILED: {e}")),
+                    }
+                }
+                Reply::Photo { path, caption } => {
+                    log("tg", format!("-> [{}] [photo] {}", u.chat_id, caption));
+                    match telegram::send_photo(&token, u.chat_id, &path, &caption).await {
+                        Ok(()) => log("tg", "photo sent OK"),
+                        Err(e) => log("tg", format!("PHOTO SEND FAILED: {e}")),
+                    }
+                }
             }
         }
     }

@@ -47,6 +47,10 @@ fn turn_to_message(turn: &Turn) -> Value {
             }
             Content::ToolResult { tool_use_id, content } => blocks
                 .push(json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })),
+            Content::Image { media_type, data } => blocks.push(json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": media_type, "data": data }
+            })),
         }
     }
     json!({ "role": role, "content": blocks })

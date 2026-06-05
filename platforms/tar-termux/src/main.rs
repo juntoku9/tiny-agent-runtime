@@ -22,10 +22,17 @@ use tar_core::{
 use tar_proto::{ToolInput, ToolManifest, ToolResult};
 
 const DEFAULT_DARK_LUX: f64 = 10.0;
-#[cfg_attr(not(feature = "cloud"), allow(dead_code))]
-const LLM_SYSTEM: &str = "You are a tiny agent running on an Android phone via Termux. You can \
-    read the ambient light sensor (read_light) and control the flashlight (flashlight). Be concise \
-    and friendly. Use the tools when asked about light or to toggle the flashlight.";
+
+// ============================================================================
+//  THE AGENT PROMPT — edit this to change the agent's personality / behavior.
+//  Used when ANTHROPIC_API_KEY is set (the real LLM brain). It is sent as the
+//  Anthropic top-level `system` prompt via AgentLoop::run(system, user_text).
+// ============================================================================
+const LLM_SYSTEM: &str = "You are a witty little AI living inside an Android phone at the edge. \
+    You have two real tools: read_light (ambient lux) and flashlight (turn the phone's torch on/off). \
+    When the user asks about brightness or to control the light, USE the tools, then reply in one \
+    short, friendly sentence. For anything else, just chat briefly. You are running on the device \
+    itself — own it.";
 
 fn log(tag: &str, msg: impl AsRef<str>) {
     println!("[{tag}] {}", msg.as_ref());
@@ -399,52 +406,49 @@ fn parse_allow(s: Option<String>) -> Vec<i64> {
     s.map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default()
 }
 
-// ---- Optional cloud-LLM brain --------------------------------------------
+// ---- Cloud LLM brain over curl (no reqwest/TLS needed) --------------------
+//
+// The real agent. Implements the HttpClient HAL by shelling out to `curl`, so
+// the same `tar-llm` AnthropicProvider (request building + tool_use parsing)
+// works in the lean build — it just needs ANTHROPIC_API_KEY and curl.
 
-#[cfg(feature = "cloud")]
-mod cloud {
-    use std::future::Future;
-    use tar_hal::{HalError, HalResult, HttpClient, HttpResponse};
+struct CurlHttp;
 
-    pub struct TermuxHttp {
-        client: reqwest::Client,
-    }
-    impl TermuxHttp {
-        pub fn new() -> Self {
-            Self { client: reqwest::Client::new() }
-        }
-    }
-    impl HttpClient for TermuxHttp {
-        fn post(
-            &self,
-            url: &str,
-            headers: &[(&str, &str)],
-            body: &[u8],
-        ) -> impl Future<Output = HalResult<HttpResponse>> {
-            let client = self.client.clone();
-            let url = url.to_string();
-            let headers: Vec<(String, String)> =
-                headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            let body = body.to_vec();
-            super::log("llm", format!("HTTPS POST {url} (calling the cloud LLM)"));
-            async move {
-                let mut req = client.post(&url).body(body);
-                for (k, v) in &headers {
-                    req = req.header(k, v);
-                }
-                let resp = req.send().await.map_err(|e| HalError::Io(e.to_string()))?;
-                let status = resp.status().as_u16();
-                super::log("llm", format!("cloud LLM responded: HTTP {status}"));
-                let bytes = resp.bytes().await.map_err(|e| HalError::Io(e.to_string()))?;
-                Ok(HttpResponse { status, body: bytes.to_vec() })
+impl tar_hal::HttpClient for CurlHttp {
+    fn post(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> impl Future<Output = tar_hal::HalResult<tar_hal::HttpResponse>> {
+        let url = url.to_string();
+        let header_strs: Vec<String> = headers.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+        let body_str = String::from_utf8_lossy(body).to_string();
+        log("llm", format!("curl POST {url}"));
+        async move {
+            let mut args: Vec<&str> = vec!["-s", "--max-time", "60", "-X", "POST", &url];
+            for h in &header_strs {
+                args.push("-H");
+                args.push(h);
             }
+            args.push("--data-binary");
+            args.push(&body_str);
+            args.push("-w");
+            args.push("\n%{http_code}");
+            let out = run_cmd("curl", &args, 65).await.map_err(tar_hal::HalError::Io)?;
+            let combined = String::from_utf8_lossy(&out.stdout);
+            let (body_part, status) = match combined.rfind('\n') {
+                Some(i) => (combined[..i].to_string(), combined[i + 1..].trim().parse().unwrap_or(0u16)),
+                None => (combined.to_string(), 0u16),
+            };
+            log("llm", format!("LLM responded: HTTP {status}"));
+            Ok(tar_hal::HttpResponse { status, body: body_part.into_bytes() })
         }
     }
 }
 
-#[cfg(feature = "cloud")]
-fn make_anthropic(key: String, model: String) -> tar_llm::AnthropicProvider<cloud::TermuxHttp> {
-    tar_llm::AnthropicProvider::new(cloud::TermuxHttp::new(), key, model)
+fn make_anthropic(key: String, model: String) -> tar_llm::AnthropicProvider<CurlHttp> {
+    tar_llm::AnthropicProvider::new(CurlHttp, key, model)
 }
 
 // ---- Per-message handler --------------------------------------------------
@@ -477,7 +481,7 @@ async fn finish<P: LlmProvider>(provider: P, system: &str, text: &str) -> String
 }
 
 async fn handle_message(text: &str, dark_lux: f64) -> String {
-    #[cfg(feature = "cloud")]
+    // Real LLM agent when a key is set; deterministic command brain otherwise.
     if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
         if !key.is_empty() {
             let model = env::var("TAR_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".into());
@@ -504,11 +508,12 @@ async fn run_telegram(token: String, dark_lux: f64) {
         log("tg", "WARNING: TAR_TG_ALLOW not set — anyone who finds your bot can use it.");
         log("tg", "Message it once; the chat id is logged so you can set TAR_TG_ALLOW=<id>.");
     }
-    #[cfg(feature = "cloud")]
     let llm = env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false);
-    #[cfg(not(feature = "cloud"))]
-    let llm = false;
-    log("tg", if llm { "brain: CLOUD LLM" } else { "brain: local command reflex (try 'light on' / 'light off' / 'status')" });
+    log("tg", if llm {
+        "brain: CLOUD LLM (real agent, freeform messages)"
+    } else {
+        "brain: local command reflex — set ANTHROPIC_API_KEY for the real LLM agent"
+    });
     log("tg", "live — message your bot now. (Ctrl+C to stop.)");
 
     let mut offset: i64 = 0;

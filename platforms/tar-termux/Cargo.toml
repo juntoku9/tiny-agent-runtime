@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "Android/Termux demo — the agent loop drives the phone flashlight from its light sensor."
+description = "Android/Termux demo — agent loop drives the phone flashlight + Telegram, LLM over curl."
 
 [[bin]]
 name = "tar-termux"
@@ -13,14 +13,7 @@ path = "src/main.rs"
 [dependencies]
 tar-core = { workspace = true }
 tar-proto = { workspace = true }
+tar-hal = { workspace = true }
+tar-llm = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
-
-# Optional cloud-LLM brain (pulls reqwest/TLS). Enable with `--features cloud`.
-tar-llm = { workspace = true, optional = true }
-tar-hal = { workspace = true, optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
-
-[features]
-default = []
-cloud = ["dep:tar-llm", "dep:tar-hal", "dep:reqwest"]

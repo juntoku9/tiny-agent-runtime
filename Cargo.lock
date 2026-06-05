@@ -850,7 +850,6 @@ dependencies = [
 name = "tar-termux"
 version = "0.0.0"
 dependencies = [
- "reqwest",
  "serde_json",
  "tar-core",
  "tar-hal",
